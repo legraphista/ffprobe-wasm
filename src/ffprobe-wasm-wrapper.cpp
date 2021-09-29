@@ -31,6 +31,7 @@ typedef struct Stream {
   int start_time;
   int duration;
   int codec_type;
+  std::string codec_type_name;
   std::string codec_name;
   std::string format;
   int bit_rate;
@@ -41,6 +42,7 @@ typedef struct Stream {
   int channels;
   int sample_rate;
   int frame_size;
+  double time_base;
 } Stream;
 
 typedef struct Frame {
@@ -69,6 +71,24 @@ typedef struct FramesResponse {
   int duration;
   double time_base;
 } FramesResponse;
+
+
+typedef struct Packet {
+  int stream_index;
+  int pts;
+  int dts;
+  int duration;
+  int size;
+  int pos;
+  bool key_frame;
+  bool discard_frame;
+  bool corrupt_frame;
+} Packet;
+
+typedef struct PacketsResponse {
+  std::vector<Packet> packets;
+  int nb_packets;
+} PacketsResponse;
 
 FileInfoResponse get_file_info(std::string filename) {
     av_log_set_level(AV_LOG_QUIET); // No logging output for libav.
@@ -123,6 +143,7 @@ FileInfoResponse get_file_info(std::string filename) {
         .start_time = (int)pFormatContext->streams[i]->start_time,
         .duration = (int)pFormatContext->streams[i]->duration,
         .codec_type = (int)pLocalCodecParameters->codec_type,
+        .codec_type_name = av_get_media_type_string(pFormatContext->streams[i]->codecpar->codec_type),
         .codec_name = fourcc,
         .format = av_get_pix_fmt_name((AVPixelFormat)pLocalCodecParameters->format),
         .bit_rate = (int)pLocalCodecParameters->bit_rate,
@@ -133,6 +154,7 @@ FileInfoResponse get_file_info(std::string filename) {
         .channels = (int)pLocalCodecParameters->channels,
         .sample_rate = (int)pLocalCodecParameters->sample_rate,
         .frame_size = (int)pLocalCodecParameters->frame_size,
+        .time_base = av_q2d(pFormatContext->streams[i]->time_base)
       };
       r.streams.push_back(stream);
       free(fourcc);
@@ -265,6 +287,65 @@ FramesResponse get_frames(std::string filename, int timestamp) {
     return r;
 }
 
+
+PacketsResponse get_packets(std::string filename) {
+    av_log_set_level(AV_LOG_QUIET); // No logging output for libav.
+
+    FILE *file = fopen(filename.c_str(), "rb");
+    if (!file) {
+      printf("cannot open file\n");
+    }
+    fclose(file);
+
+    AVFormatContext *pFormatContext = avformat_alloc_context();
+    if (!pFormatContext) {
+      printf("ERROR: could not allocate memory for Format Context\n");
+    }
+
+    // Open the file and read header.
+    int ret;
+    if ((ret = avformat_open_input(&pFormatContext, filename.c_str(), NULL, NULL)) < 0) {
+        printf("ERROR: %s\n", av_err2str(ret));
+    }
+
+    // Get stream info from format.
+    if (avformat_find_stream_info(pFormatContext, NULL) < 0) {
+      printf("ERROR: could not get stream info\n");
+    }
+
+    int nb_packets = 0;
+
+    PacketsResponse r;
+
+    AVPacket *pPacket = av_packet_alloc();
+
+    // Read video frames.
+    while (av_read_frame(pFormatContext, pPacket) >= 0) {
+
+      Packet p;
+      p.stream_index = pPacket->stream_index;
+      p.pts = pPacket->pts;
+      p.dts = pPacket->dts;
+      p.duration = pPacket->duration;
+      p.size = pPacket->size;
+      p.pos = pPacket->pos;
+      p.key_frame = !!(pPacket->flags & AV_PKT_FLAG_KEY);
+      p.discard_frame = !!(pPacket->flags & AV_PKT_FLAG_DISCARD);
+      p.corrupt_frame = !!(pPacket->flags & AV_PKT_FLAG_CORRUPT);
+
+      r.packets.push_back(p);
+
+      ++nb_packets;
+      av_packet_unref(pPacket);
+    }
+
+    r.nb_packets = nb_packets;
+    avformat_close_input(&pFormatContext);
+    av_packet_free(&pPacket);
+
+    return r;
+}
+
 EMSCRIPTEN_BINDINGS(constants) {
     function("avformat_version", &c_avformat_version);
     function("avcodec_version", &c_avcodec_version);
@@ -277,6 +358,7 @@ EMSCRIPTEN_BINDINGS(structs) {
   .field("start_time", &Stream::start_time)
   .field("duration", &Stream::duration)
   .field("codec_type", &Stream::codec_type)
+  .field("codec_type_name", &Stream::codec_type_name)
   .field("codec_name", &Stream::codec_name)
   .field("format", &Stream::format)
   .field("bit_rate", &Stream::bit_rate)
@@ -287,6 +369,7 @@ EMSCRIPTEN_BINDINGS(structs) {
   .field("channels", &Stream::channels)
   .field("sample_rate", &Stream::sample_rate)
   .field("frame_size", &Stream::frame_size)
+  .field("time_base", &Stream::time_base)
   ;
   register_vector<Stream>("Stream");
 
@@ -318,4 +401,23 @@ EMSCRIPTEN_BINDINGS(structs) {
   .field("time_base", &FramesResponse::time_base)
   ;
   function("get_frames", &get_frames);
+
+  emscripten::value_object<Packet>("Packet")
+   .field("stream_index", &Packet::stream_index)
+   .field("pts", &Packet::pts)
+   .field("dts", &Packet::dts)
+   .field("duration", &Packet::duration)
+   .field("size", &Packet::size)
+   .field("pos", &Packet::pos)
+   .field("key_frame", &Packet::key_frame)
+   .field("discard_frame", &Packet::discard_frame)
+   .field("corrupt_frame", &Packet::corrupt_frame);
+   register_vector<Packet>("Packet");
+
+   emscripten::value_object<PacketsResponse>("PacketsResponse")
+     .field("packets", &PacketsResponse::packets)
+     .field("nb_packets", &PacketsResponse::nb_packets)
+   ;
+   function("get_packets", &get_packets);
+
 }

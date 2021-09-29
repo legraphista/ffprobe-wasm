@@ -38,7 +38,7 @@ onmessage = (e) => {
             // Cleanup mount.
             FS.unmount('/work');
             break;
-        
+
         case 'get_frames':
             if (!FS.analyzePath('/work').exists) {
                 FS.mkdir('/work');
@@ -63,7 +63,31 @@ onmessage = (e) => {
             // Cleanup mount.
             FS.unmount('/work');
             break;
-    
+
+        case 'get_packets':
+            if (!FS.analyzePath('/work').exists) {
+                FS.mkdir('/work');
+            }
+            FS.mount(WORKERFS, { files: [file] }, '/work');
+
+            const packets = Module.get_packets('/work/' + file.name);
+
+            // Remap frames into collection.
+            const p = [];
+            for (let i = 0; i < packets.packets.size(); i++) {
+                p.push(packets.packets.get(i));
+            }
+
+            data = {
+                ...packets,
+                frames: p,
+            }
+            postMessage(data);
+
+            // Cleanup mount.
+            FS.unmount('/work');
+            break;
+
         default:
             break;
     }
